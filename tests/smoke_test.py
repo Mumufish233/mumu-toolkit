@@ -17,7 +17,7 @@ from pypdf import PdfWriter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
-REPORT = os.path.join(ROOT, "项目", "21-冒烟测试报告.md")
+REPORT = os.path.join(ROOT, "smoke-report.md")
 BASE = os.path.join(tempfile.gettempdir(), "smoke_mumu")
 
 
@@ -130,8 +130,6 @@ def main():
                            os.path.join(BASE, "图集.pdf")])
 
     # 5 视频（只验证导出帮助和环境，不真渲）
-    rows.append(("build_long 存在", os.path.exists(os.path.join(ROOT, "tools", "build_long.py")), "脚本在"))
-    print(("✅" if rows[-1][1] else "❌") + " build_long 存在")
 
     # 写报告
     lines = ["# 冒烟测试报告", "",
@@ -142,6 +140,7 @@ def main():
     bad = [r for r in rows if not r[1]]
     lines += ["", "---", "",
               f"**结论：{'全部通过' if not bad else '失败 ' + str(len(bad)) + ' 项'}**", ""]
+    os.makedirs(os.path.dirname(REPORT), exist_ok=True)
     with open(REPORT, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 

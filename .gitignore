@@ -6,3 +6,4 @@ venv/
 tidy-log-*.json
 rename-log-*.json
 .DS_Store
+smoke-report.md
