@@ -38,11 +38,17 @@ CACHE_MAX_BYTES = 2 * 1024 * 1024
 LEDGER_MAX_LINES = 20000
 
 # 每字符 ≈ token（DeepSeek 官方：1 中文字符≈0.6 token；Qwen2.5 中文 CPT≈2.8）
+# 系数用真 tokenizer 标定（2026-11-03 实测）：
+#   deepseek-v3：中文 0.583 token/字，英文 0.191 token/字符
+#   qwen-2.5   ：中文 0.625 token/字，英文 0.191 token/字符
 MODEL_PROFILES = {
-    "deepseek": (0.60, 0.30),
-    "qwen": (1 / 2.8, 0.30),
+    "deepseek": (0.583, 0.191),
+    "qwen": (0.625, 0.191),
     "generic": (1 / 1.2, 1 / 3.5),
 }
+# 真 tokenizer 对应的模型名（offline_token_counter）
+EXACT_MODEL = {"deepseek": "deepseek-v3", "qwen": "qwen-2.5", "generic": None}
+_EXACT_OK = None
 PRICE_CNY_PER_M = {"deepseek": 2.0, "qwen": 2.0, "generic": 2.0}
 CUR_MODEL = "deepseek"
 
@@ -51,11 +57,46 @@ WRITE_HINTS = ("rm ", "del ", "move ", "mv ", "cp ", "copy ", "publish", "send",
                "git push", "commit", "pip install", "upload", "delete", ">", ">>")
 
 
+def tokenizer_available():
+    """真 tokenizer 能不能用（offline_token_counter，本地离线）。"""
+    global _EXACT_OK
+    if _EXACT_OK is None:
+        try:
+            import offline_token_counter  # noqa: F401
+            _EXACT_OK = True
+        except Exception:
+            _EXACT_OK = False
+    return _EXACT_OK
+
+
+def tok_exact(text, model=None):
+    """用真 tokenizer 数 token；不可用返回 None。"""
+    name = EXACT_MODEL.get(model or CUR_MODEL)
+    if not name or not tokenizer_available():
+        return None
+    try:
+        import offline_token_counter
+        return int(offline_token_counter.count_tokens(text, model=name))
+    except Exception:
+        return None
+
+
 def tok(text, model=None):
+    """优先精确；不可用才估算。返回值恒定是 token 数。"""
+    exact = tok_exact(text, model)
+    if exact is not None:
+        return exact
     cjk_c, lat_c = MODEL_PROFILES.get(model or CUR_MODEL, MODEL_PROFILES["deepseek"])
     cjk = len(re.findall(r"[\u4e00-\u9fff]", text))
     latin = len(text) - cjk
     return int(cjk * cjk_c + latin * lat_c)
+
+
+def mode_label(model=None):
+    name = EXACT_MODEL.get(model or CUR_MODEL)
+    if name and tokenizer_available():
+        return f"精确·{name}"
+    return f"估算·{model or CUR_MODEL}"
 
 
 def log_event(kind, saved=0, note=""):
@@ -113,7 +154,7 @@ def cmd_meter(args):
     for p, n, t, v in rows:
         print(f"{os.path.basename(p)[:36]:<38}{n:>9}{t:>9}  {v}")
     print("-" * 78)
-    print(f"合计 ≈{sum(r[2] for r in rows)} token（估算模型 {CUR_MODEL}，非精确）")
+    print(f"合计 {sum(r[2] for r in rows)} token（{mode_label()}）")
     log_event("meter", 0, f"{len(rows)} 个文件")
     return 0
 
@@ -158,7 +199,7 @@ def cmd_brief(args):
     saved = total - tok(brief)
     if saved > 0:
         log_event("brief", saved, f"{len(rows)} 个文件")
-    print(f"\n[原文件 ≈{total} · 简报 ≈{tok(brief)} · 省 ≈{saved}]", file=sys.stderr)
+    print(f"\n[原文件 {total} · 简报 {tok(brief)} · 省 {saved} · {mode_label()}]", file=sys.stderr)
     return 0
 
 
@@ -255,7 +296,7 @@ def cmd_report(args):
                          ensure_ascii=False, indent=1))
         return 0
 
-    print(f"📊 tokenguard 账本（近 30 天 · 估算模型 {CUR_MODEL}）")
+    print(f"📊 tokenguard 账本（近 30 天 · {mode_label()}）")
     print("-" * 46)
     for kind, v in sorted(by_kind.items(), key=lambda x: -x[1]):
         label = {"cache_hit": "缓存命中", "brief": "简报", "outsource": "外包重活"}.get(kind, kind)

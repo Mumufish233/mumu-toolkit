@@ -148,3 +148,45 @@ MIT。拿走用，改完不用告诉我。
 - **cache 无并发锁**：两个进程同时写同一 key 可能损坏
 - **没有 hook**：还是要手动调；真正省事要接进 Agent 的 tools/pre-execute
 - **brief 不是摘要**：只是结构预览，别指望它替代理解
+
+---
+
+## 🎯 v0.4：接了**真 tokenizer**（不再只是估算）
+
+安装（可选，装了就是精确值）：
+
+```bash
+pip install offline-token-counter     # 离线，429 个 tokenizer，含 DeepSeek/Qwen
+```
+
+```bash
+python tokenguard.py --model deepseek meter AGENTS.md
+# 合计 5469 token（精确·deepseek-v3）
+
+python tokenguard.py --model qwen meter AGENTS.md
+# 合计 5970 token（精确·qwen-2.5）
+```
+
+**没装也能用**：自动退回**标定后的估算**（用真 tokenizer 标出来的系数：
+DeepSeek 中文 0.583 token/字、英文 0.191 token/字符），并**明确标注"估算"**。
+
+### 精度修正（实测）
+
+| 方式 | AGENTS.md（9,663 字）| 误差 |
+|---|---|---|
+| 旧估算（1.2 字/token）| 4,443 | **低估 23%** |
+| 新标定估算（兜底用）| 4,779 | 低估 13% |
+| **真 tokenizer（deepseek-v3）** | **5,469** | 基准 |
+
+**结论：之前所有"省了多少 token"的数字，都偏保守——真实数字更大。**
+（比如日志整读从"23,782"修正为 **31,091** token）
+
+### 用真 tokenizer 量出来的真相（我们自己的库）
+
+| 文件 | 真实 token |
+|---|---|
+| `12-四小时日志.md` | **31,091** |
+| `工具库索引.md` | 6,116 |
+| `视频-最小流水线.md` | 5,542 |
+| `AGENTS.md` | 5,469 |
+| `AI构图-提示词模板.md` | 4,628 |
