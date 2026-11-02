@@ -51,6 +51,7 @@ EXACT_MODEL = {"deepseek": "deepseek-v3", "qwen": "qwen-2.5", "generic": None}
 _EXACT_OK = None
 PRICE_CNY_PER_M = {"deepseek": 2.0, "qwen": 2.0, "generic": 2.0}
 CUR_MODEL = "deepseek"
+VERSION = "0.6"
 
 # 只给"确定性读类"命令缓存；这些词一出现就拒绝（除非 --allow-write）
 WRITE_HINTS = ("rm ", "del ", "move ", "mv ", "cp ", "copy ", "publish", "send",
@@ -100,10 +101,22 @@ def mode_label(model=None):
 
 
 def log_event(kind, saved=0, note=""):
+    """追加一条账目；带算法版本；用独占锁避免并发写乱序。"""
     os.makedirs(HOME, exist_ok=True)
-    with open(LEDGER, "a", encoding="utf-8") as f:
-        f.write(json.dumps({"ts": int(time.time()), "kind": kind,
-                            "saved": int(saved), "note": note}, ensure_ascii=False) + "\n")
+    line = json.dumps({"ts": int(time.time()), "kind": kind, "saved": int(saved),
+                       "note": note, "v": VERSION, "model": CUR_MODEL},
+                      ensure_ascii=False) + "\n"
+    try:
+        import msvcrt  # Windows 文件锁
+        with open(LEDGER, "a", encoding="utf-8") as f:
+            msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                f.write(line)
+            finally:
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+    except Exception:
+        with open(LEDGER, "a", encoding="utf-8") as f:
+            f.write(line)
     rotate_ledger()
 
 
@@ -130,6 +143,31 @@ def parse_ttl(s):
         return 24 * 3600
     n, unit = int(m.group(1)), m.group(2) or "h"
     return n * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
+
+
+
+def _atomic_json(path, obj):
+    """原子写：先写临时文件再替换，避免两个进程同时写坏缓存。"""
+    tmp = f"{path}.tmp{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
+def _cache_gc(max_age_days=7):
+    """顺手清理过期缓存，避免无限膨胀。"""
+    if not os.path.isdir(CACHE):
+        return
+    cutoff = time.time() - max_age_days * 86400
+    for name in os.listdir(CACHE):
+        if not name.endswith(".json"):
+            continue
+        pp = os.path.join(CACHE, name)
+        try:
+            if os.path.getmtime(pp) < cutoff:
+                os.remove(pp)
+        except Exception:
+            pass
 
 
 # ---------- meter ----------
@@ -224,7 +262,15 @@ def cmd_cache(args):
         return r.returncode
 
     os.makedirs(CACHE, exist_ok=True)
-    key_src = os.getcwd() + "\x00" + "\x00".join(cmd)   # v0.3: 加 cwd
+    _cache_gc()
+    dep_sig = []
+    for dp in getattr(args, "depends", []) or []:
+        try:
+            st = os.stat(dp)
+            dep_sig.append(f"{dp}:{st.st_size}:{int(st.st_mtime)}")
+        except OSError:
+            dep_sig.append(f"{dp}:missing")
+    key_src = os.getcwd() + "\x00" + "\x00".join(cmd) + "\x00" + "|".join(dep_sig)
     key = hashlib.sha256(key_src.encode("utf-8")).hexdigest()[:16]
     path = os.path.join(CACHE, key + ".json")
     ttl = parse_ttl(args.ttl)
@@ -236,7 +282,9 @@ def cmd_cache(args):
                 sys.stdout.write(d.get("stdout", ""))
                 sys.stderr.write(d.get("stderr", ""))
                 age = int((time.time() - d["ts"]) // 60)
-                print(f"[tokenguard] 命中缓存（{age} 分钟前，省 ≈{d.get('tok', 0)} token）",
+                print(f"[tokenguard] 命中缓存（{age} 分钟前，省 ≈{d.get('tok', 0)} token）"
+                      + ("；注意：未校验依赖文件是否已改，加 --force 可重跑"
+                         if not getattr(args, "depends", None) else "；依赖文件未变"),
                       file=sys.stderr)
                 log_event("cache_hit", d.get("tok", 0), " ".join(cmd)[:80])
                 return d.get("rc", 0)
@@ -249,10 +297,12 @@ def cmd_cache(args):
     sys.stderr.write(r.stderr or "")
     size = len(r.stdout or "") + len(r.stderr or "")
     if size <= CACHE_MAX_BYTES:
-        json.dump({"ts": time.time(), "rc": r.returncode, "cwd": os.getcwd(),
-                   "stdout": r.stdout or "", "stderr": r.stderr or "",
-                   "tok": tok((r.stdout or "") + (r.stderr or ""))},
-                  open(path, "w", encoding="utf-8"), ensure_ascii=False)
+        try:
+            _atomic_json(path, {"ts": time.time(), "rc": r.returncode, "cwd": os.getcwd(),
+                                "stdout": r.stdout or "", "stderr": r.stderr or "",
+                                "tok": tok((r.stdout or "") + (r.stderr or ""))})
+        except Exception:
+            pass  # 缓存写失败不影响主路径
         log_event("cache_set", 0, " ".join(cmd)[:80])
     else:
         print(f"[tokenguard] 输出 {size//1024}KB 超过缓存上限，本次不缓存", file=sys.stderr)
@@ -305,6 +355,11 @@ def cmd_report(args):
     print(f"  **合计省下**  ≈{saved:>8} token")
     print(f"  粗估金额（{price} 元/百万 token）：≈ ¥{saved/1_000_000*price:.4f}")
     print("\n账本：", LEDGER)
+    print("口径：以上为工具自记（非第三方审计）；30 天窗口，断档会在下方标出")
+    # 连续性检查
+    days = sorted({time.strftime("%Y-%m-%d", time.localtime(e["ts"])) for e in month})
+    if len(days) >= 2:
+        print(f"  记录覆盖 {days[0]} → {days[-1]}（{len(days)} 天有记录）")
     return 0
 
 
@@ -381,6 +436,49 @@ def cmd_read(args):
     return 0
 
 
+
+# ---------- demo（新人 10 秒看懂） ----------
+def cmd_demo(args):
+    """不需要任何参数：造一个大文件，现场演示"整读 vs 守门"的差别。"""
+    import tempfile
+    tmpdir = tempfile.mkdtemp(prefix="tokenguard-demo-")
+    path = os.path.join(tmpdir, "一个很长的日志.md")
+    body = []
+    for i in range(1, 121):
+        body.append(f"## 第 {i} 条记录")
+        body.append("".join(f"这是第 {i} 条里的内容，写得很啰嗦，占地方。" for _ in range(4)))
+        body.append("")
+    open(path, "w", encoding="utf-8").write("\n".join(body))
+
+    text = open(path, encoding="utf-8").read()
+    full = tok(text)
+    print("=" * 56)
+    print("tokenguard demo —— 不用参数，看它到底省什么")
+    print("=" * 56)
+    print(f"造了一个文件：{os.path.basename(path)}")
+    print(f"  字数 {len(text)} · 整读要 {full} token（{mode_label()}）")
+    print()
+    print("如果整读（旧做法）：上下文 +" + str(full) + " token，读完才能开始干活")
+    print()
+    print("用守门（新做法）——只给预览和指路：")
+    print("-" * 56)
+    lines = text.split("\n")
+    head = "\n".join(lines[:10])
+    print(head)
+    print("...")
+    guard_used = tok(head)
+    print("-" * 56)
+    print(f"放进上下文 {guard_used} token，省 {full - guard_used}（{(1 - guard_used/full)*100:.0f}%）")
+    print()
+    print("要具体哪一段，就这样问：")
+    print(f'  tokenguard read "{path}" --grep 第7条')
+    print(f'  tokenguard read "{path}" --range 30-45')
+    print()
+    print("账本会把这些省下的量记下来：tokenguard report")
+    log_event("demo", max(0, full - guard_used), os.path.basename(path))
+    return 0
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(prog="tokenguard", description="Agent 省 token 守门员 v0.3")
@@ -399,6 +497,8 @@ def main():
     c.add_argument("--ttl", default="24h")
     c.add_argument("--force", action="store_true")
     c.add_argument("--allow-write", action="store_true")
+    c.add_argument("--depends", nargs="*", default=[],
+                   help="这条命令依赖哪些文件？改了就让缓存失效（大小+修改时间）")
     c.add_argument("command", nargs=argparse.REMAINDER)
     c.set_defaults(fn=cmd_cache)
 
@@ -418,6 +518,9 @@ def main():
     r.add_argument("--limit", type=int, default=40, help="grep 最多显示多少行")
     r.add_argument("--full", action="store_true", help="强制整读（会警告）")
     r.set_defaults(fn=cmd_read)
+
+    dm = sub.add_parser("demo", help="新人演示：造个文件，现场展示省多少（不用参数）")
+    dm.set_defaults(fn=cmd_demo)
 
     d = sub.add_parser("report", help="看省了多少")
     d.add_argument("--json", action="store_true")
