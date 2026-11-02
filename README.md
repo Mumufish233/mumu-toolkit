@@ -1,154 +1,83 @@
 # mumu-toolkit
 
-> Small, dependency-light Windows automation tools that **preview before they touch anything**, and **can always be undone**.
->
-> 一组小而干脆的 Windows 自动化小工具。**先预演，再动手；做了就能撤回。**
+> 小而干脆的工具集：**每个都先给判断，再动手；能撤回的才敢改。**
+> Small, dependency-light tools. **Preview first. Never break things silently.**
 
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](#license)
 
 ---
 
-## Why this exists / 为什么造它
+## 里面有什么
 
-Most "clean up my folder" scripts are all-or-nothing: you run them, and if they guess wrong, you spend an hour undoing it.
-
-These tools take the opposite stance:
-
-- **Dry-run first.** `--dry-run` prints exactly what would change and writes nothing.
-- **Undo always.** Every run writes a JSON undo log; one flag reverses it.
-- **Never delete.** Files are moved, never removed. Name collisions get a `_1` suffix.
-
-> 大多数"整理文件夹"的脚本都是一次性梭哈。这几个工具反过来：
-> **先预演、可撤销、绝不删除。**
-
----
-
-## The tools / 工具
-
-| Tool | What it does | 实测 |
+| 目录 | 干什么 | 一句话 |
 |---|---|---|
-| [`file_tidy.py`](tools/file_tidy.py) | Sort files into type folders | 64 files in **0.4s**, undo in **0.2s** |
-| [`rename_batch.py`](tools/rename_batch.py) | Prefix / sequence / date / regex rename | `第01集 → EP01`, full undo |
-| [`excel_merge.py`](tools/excel_merge.py) | Merge many `.xlsx` into one | column union, order-independent mapping |
-| [`pdf_kit.py`](tools/pdf_kit.py) | Merge / split / extract text / images→PDF | 13-page merge, 2880 chars extracted |
+| **[tokenguard/](tokenguard/)** | **给 Agent 省 token**（读前守门 / 量 / 简报 / 缓存 / 账本）| 让 token 浪费可见，再谈省 |
+| `tools/` | Windows 自动化（表格合并 / 文件整理 / PDF / 批量改名）| 先预演、可撤销、绝不删除 |
+| `token-saver/` | 最早的三件套（ctx_meter / log_rotate / smoke_all）| tokenguard 的散装版 |
 
 ---
 
-## Quick start / 上手
+## 1. tokenguard —— 主推
+
+**一个命令，五件事：量 · 控 · 省 · 算账 · 守门。**
 
 ```bash
-pip install openpyxl pypdf pillow   # only needed for excel_merge / pdf_kit
-
-# 1) See what would happen (nothing is touched)
-python tools/file_tidy.py "D:\Downloads" --dry-run
-
-# 2) Do it
-python tools/file_tidy.py "D:\Downloads"
-
-# 3) Changed your mind
-python tools/file_tidy.py "D:\Downloads" --undo "tidy-log-20261028-135820.json"
+python tokenguard/tokenguard.py read  大文件.md              # 读前守门：超预算只给预览
+python tokenguard/tokenguard.py meter 文件A 文件B            # 量：值不值得读
+python tokenguard/tokenguard.py brief 文件A                  # 简报：骨架替代整读
+python tokenguard/tokenguard.py cache --ttl 24h -- <命令>    # 缓存：只缓存读类
+python tokenguard/tokenguard.py report                       # 账本：省了多少
 ```
 
-### Batch rename
+**实测（我们自己项目，精确 tokenizer 计数）**
 
-```bash
-python tools/rename_batch.py "D:\photos" --prefix trip --seq 3 --dry-run
-python tools/rename_batch.py "D:\episodes" --regex "第(\d+)集" --replace "EP\1"
-```
+| 场景 | 以前 | 现在 | 省 |
+|---|---|---|---|
+| 读一个 31,453 token 的日志 | 31,453 | **329** | **99%** |
+| 每次开工恢复上下文 | 31,325 | **192** | 99% |
+| 日志按月切分后整读 | 63,228 | 23,782 | 62% |
+| 重复命令第二次运行 | 5,000 | **0** | 100% |
 
-### Merge spreadsheets
+**30 天账本累计省下 ≈104,000 token**（`tokenguard report` 自己算的）。
 
-```bash
-python tools/excel_merge.py "D:\reports" -o merged.xlsx
-```
-
-Handles differing columns (union) and differing column **order**. Adds `_source_file` / `_source_sheet` columns for traceability.
-
-### PDF toolbox
-
-```bash
-python tools/pdf_kit.py merge a.pdf b.pdf -o out.pdf
-python tools/pdf_kit.py split big.pdf --pages 1-3,7,10-13 -o part#.pdf
-python tools/pdf_kit.py text a.pdf -o text.txt
-python tools/pdf_kit.py fromimg "D:\photos" -o album.pdf
-```
-
-> Scanned PDFs (image-only) yield no text — `text` warns you instead of pretending it worked.
+**边界（先说清楚）**：不改模型、不做摘要、单人小量省不了多少钱。它的价值是**让浪费可见 + 不让你犯错**。
 
 ---
 
-## Tests / 自测
+## 2. `tools/` —— Windows 自动化
 
 ```bash
-python tests/smoke_test.py
+python tools/file_tidy.py  D:\Downloads --dry-run     # 先预演
+python tools/file_tidy.py  D:\Downloads               # 确认后执行（写撤销日志）
+python tools/file_tidy.py  D:\Downloads --undo <log>  # 一条命令撤回
+python tools/excel_merge.py  a.xlsx b.xlsx -o out.xlsx
+python tools/pdf_kit.py     merge  a.pdf b.pdf -o out.pdf
+python tools/rename_batch.py D:\某目录 --pattern "*.jpg"
 ```
 
-Creates a throwaway folder, exercises every tool end to end, prints PASS/FAIL, exits non-zero on failure.
+三条立场：**`--dry-run` 先预演 · 每步可撤销 · 绝不删除（只移动）**。
 
-```
-✅ file_tidy 预演
-✅ file_tidy 真整理  7 个分类目录
-✅ rename_batch 真改名  5 个文件
-✅ excel_merge 结果  3 行 × 5 列
-✅ pdf_kit 合并
-✅ pdf_kit 拆分
-✅ pdf_kit 图转PDF
-结论: 全部通过
+---
+
+## 3. `token-saver/` —— 散装三件套
+
+```bash
+python token-saver/tools/ctx_meter.py 文件              # 估 token
+python token-saver/tools/log_rotate.py --log 日志.md --archive 归档/ --apply
+python token-saver/tools/smoke_all.py --tools-dir tools/  # 批量脚本冒烟
 ```
 
 ---
 
-## Design notes / 设计取舍
+## 为什么值得看
 
-- **Standard library only** where possible; the two Excel/PDF tools need `openpyxl` / `pypdf` / `pillow`.
-- **No GUI, no service, no telemetry.** CLI scripts you can read in five minutes.
-- **Undo logs are plain JSON** — diffable, greppable, portable.
-- **Scanned PDFs are called out, not silently mis-handled.**
+- **每个工具都有边界声明**：不吹牛，写清它做不到什么
+- **每个数字都可复现**：跑一遍命令就能自己验证
+- **每个改动能撤回**：文件操作有撤销日志，缓存有 `--force`
 
 ---
 
 ## License
 
-MIT
-
----
-
-## For AI agents / 给 Agent 用：`token-saver/`
-
-长期跑在同一个会话里的 Agent，token 往往不是被"思考"吃掉的，而是被三件事吃掉：
-**整读大文件、日志无限膨胀、工具坏了没人知道。**
-
-`token-saver/` 里是三个零依赖小工具，专治这三件事：
-
-| 工具 | 一句话 | 实测 |
-|---|---|---|
-| `ctx_meter.py` | 读文件**之前**先估 token | 一个 126 千字日志 ≈ **63,228 token** |
-| `log_rotate.py` | 巨型日志按月切 | 126 千字 → 42 千字，**省 ≈4.2 万 token/次** |
-| `smoke_all.py` | 批量脚本"能不能启动"体检 | 测 47 个 / 跳过 86 个（危险的）/ **0 失败** |
-
-```bash
-python token-saver/tools/ctx_meter.py YOUR_FILE.md
-python token-saver/tools/log_rotate.py --log YOUR_LOG.md --archive log-archive --apply
-python token-saver/tools/smoke_all.py --tools-dir tools/
-```
-
-里面还有 `SKILL.md`——给 Agent 读的操作说明（什么时候量、什么时候切、什么时候别读）。
-
----
-
-## 💰 `tokenguard/` — 给 Agent 开发者省 token
-
-**一个命令，四件事：量 · 控 · 省 · 算账。** 免费、MIT、零依赖。
-
-```bash
-python tokenguard/tokenguard.py meter  AGENTS.md 日志.md     # 读前先量
-python tokenguard/tokenguard.py brief  AGENTS.md 计划.md     # 定长简报替代整读
-python tokenguard/tokenguard.py cache  --ttl 24h -- <命令>   # 结果缓存
-python tokenguard/tokenguard.py report                       # 看省了多少
-```
-
-实测：恢复上下文 31,325 → **192 token**；日志整读 63,228 → **23,782**；重复命令 100% 命中。
-
-> 大多数人不是不愿意省，**是看不见浪费在哪**。这个工具先让浪费可见。
-
+MIT。拿走用，改完不用告诉我，但改了 bug 建议提个 issue。
