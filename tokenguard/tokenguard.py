@@ -308,6 +308,79 @@ def cmd_report(args):
     return 0
 
 
+
+# ---------- read（最薄的 hook：读前自动量） ----------
+def cmd_read(args):
+    """读文件的守门：先量、再决定怎么读，只把需要的部分放进上下文。
+
+    这就是"钩子"的最薄实现：把"我该不该整读"从我的自觉，变成命令的默认行为。
+    """
+    path = args.file
+    if not os.path.exists(path):
+        print(f"❌ 不存在：{path}")
+        return 2
+    text = open(path, encoding="utf-8-sig", errors="ignore").read()
+    lines = text.split("\n")
+    total = tok(text)
+    label = mode_label()
+
+    # ① 要检索
+    if args.grep:
+        pat = args.grep
+        hits = [(i + 1, ln) for i, ln in enumerate(lines) if pat in ln]
+        shown = "\n".join(f"{i}: {ln.rstrip()}" for i, ln in hits[:args.limit])
+        print(f"[{os.path.basename(path)}] 全文 {total} token（{label}）· 命中 {len(hits)} 行")
+        print("-" * 60)
+        print(shown if shown else "（没命中）")
+        used = tok(shown)
+        saved = max(0, total - used)
+        log_event("read_grep", saved, f"{os.path.basename(path)} pat={pat}")
+        print(f"\n[只放 {used} token，省 {saved}]", file=sys.stderr)
+        return 0
+
+    # ② 要指定行范围
+    if args.range:
+        try:
+            a, b = [int(x) for x in args.range.split("-")]
+        except Exception:
+            print("❌ --range 要写成 12-40")
+            return 2
+        chunk = "\n".join(f"{i}: {lines[i-1].rstrip()}"
+                           for i in range(max(1, a), min(len(lines), b) + 1))
+        print(f"[{os.path.basename(path)}] 全文 {total} token（{label}）· 取 {a}-{b} 行")
+        print("-" * 60)
+        print(chunk)
+        used = tok(chunk)
+        log_event("read_range", max(0, total - used), f"{os.path.basename(path)} {a}-{b}")
+        print(f"\n[只放 {used} token，省 {total - used}]", file=sys.stderr)
+        return 0
+
+    # ③ 小文件 / 强制整读
+    if total < args.budget or args.full:
+        if total >= args.budget:
+            print(f"⚠️ 强制整读：{total} token 超过预算 {args.budget}", file=sys.stderr)
+        print(text)
+        log_event("read_full", 0, f"{os.path.basename(path)} {total}tok")
+        return 0
+
+    # ④ 大文件：只给骨架 + 指路（这就是守门）
+    n = args.preview
+    head = "\n".join(lines[:n])
+    print(f"[{os.path.basename(path)}] 全文 {total} token（{label}）超过预算 {args.budget} → 不给整读")
+    print("-" * 60)
+    print(f"（前 {n} 行预览）")
+    print(head)
+    print("-" * 60)
+    print("要哪一部分，用这三种：")
+    print(f'  tokenguard read "{path}" --grep "关键词"')
+    print(f'  tokenguard read "{path}" --range 120-180')
+    print(f'  tokenguard read "{path}" --full        # 确认要整读（不建议）')
+    used = tok(head)
+    log_event("read_guard", max(0, total - used), f"{os.path.basename(path)} {total}tok")
+    print(f"\n[只放 {used} token，省 {total - used}]", file=sys.stderr)
+    return 0
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(prog="tokenguard", description="Agent 省 token 守门员 v0.3")
@@ -335,6 +408,16 @@ def main():
     e.add_argument("--saved", type=int, default=None)
     e.add_argument("--note", default="")
     e.set_defaults(fn=cmd_settle)
+
+    r = sub.add_parser("read", help="读文件守门：先量再决定怎么读（最薄 hook）")
+    r.add_argument("file")
+    r.add_argument("--budget", type=int, default=800, help="超过这个 token 就不给整读（默认 800）")
+    r.add_argument("--grep", default=None, help="只取命中的行")
+    r.add_argument("--range", default=None, help="只取指定行，如 12-40")
+    r.add_argument("--preview", type=int, default=25, help="大文件预览多少行（默认 25）")
+    r.add_argument("--limit", type=int, default=40, help="grep 最多显示多少行")
+    r.add_argument("--full", action="store_true", help="强制整读（会警告）")
+    r.set_defaults(fn=cmd_read)
 
     d = sub.add_parser("report", help="看省了多少")
     d.add_argument("--json", action="store_true")

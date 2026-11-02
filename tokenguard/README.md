@@ -190,3 +190,28 @@ DeepSeek 中文 0.583 token/字、英文 0.191 token/字符），并**明确标�
 | `视频-最小流水线.md` | 5,542 |
 | `AGENTS.md` | 5,469 |
 | `AI构图-提示词模板.md` | 4,628 |
+
+---
+
+## 🚪 v0.5：`read` —— 最薄的 hook（读前自动量）
+
+```bash
+python tokenguard.py read 大文件.md                 # 超预算 → 只给前 25 行 + 指路
+python tokenguard.py read 大文件.md --grep "关键词"   # 只给命中行
+python tokenguard.py read 大文件.md --range 120-180  # 只给这段
+python tokenguard.py read 小文件.md                  # 小文件直接给
+python tokenguard.py read 大文件.md --full           # 强制整读（会警告）
+```
+
+**这就是"hook 化"最薄的一层**：把"我该不该整读"从**人的自觉**变成**命令的默认行为**。
+
+### 实测（我们自己的日志，31,453 token）
+
+| 用法 | 放进上下文的 token | 省 |
+|---|---|---|
+| 整读 | 31,453 | 0 |
+| **`read`（守门）** | **329** | **31,124** |
+| `read --grep tokenguard` | 388 | 31,065 |
+| `read --range 1-6` | 66 | 5,679 |
+
+**它不聪明，但它不让你犯错。**
