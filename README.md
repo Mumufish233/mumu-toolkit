@@ -111,3 +111,27 @@ Creates a throwaway folder, exercises every tool end to end, prints PASS/FAIL, e
 ## License
 
 MIT
+
+---
+
+## For AI agents / 给 Agent 用：`token-saver/`
+
+长期跑在同一个会话里的 Agent，token 往往不是被"思考"吃掉的，而是被三件事吃掉：
+**整读大文件、日志无限膨胀、工具坏了没人知道。**
+
+`token-saver/` 里是三个零依赖小工具，专治这三件事：
+
+| 工具 | 一句话 | 实测 |
+|---|---|---|
+| `ctx_meter.py` | 读文件**之前**先估 token | 一个 126 千字日志 ≈ **63,228 token** |
+| `log_rotate.py` | 巨型日志按月切 | 126 千字 → 42 千字，**省 ≈4.2 万 token/次** |
+| `smoke_all.py` | 批量脚本"能不能启动"体检 | 测 47 个 / 跳过 86 个（危险的）/ **0 失败** |
+
+```bash
+python token-saver/tools/ctx_meter.py YOUR_FILE.md
+python token-saver/tools/log_rotate.py --log YOUR_LOG.md --archive log-archive --apply
+python token-saver/tools/smoke_all.py --tools-dir tools/
+```
+
+里面还有 `SKILL.md`——给 Agent 读的操作说明（什么时候量、什么时候切、什么时候别读）。
+

@@ -1,0 +1,13 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# 我自己的测试产物
+examples/log-archive/
+examples/*.bak-*
+*.bak-*
+
+# 编辑器
+.vscode/
+.idea/
