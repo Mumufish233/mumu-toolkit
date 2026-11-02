@@ -135,3 +135,20 @@ python token-saver/tools/smoke_all.py --tools-dir tools/
 
 里面还有 `SKILL.md`——给 Agent 读的操作说明（什么时候量、什么时候切、什么时候别读）。
 
+---
+
+## 💰 `tokenguard/` — 给 Agent 开发者省 token
+
+**一个命令，四件事：量 · 控 · 省 · 算账。** 免费、MIT、零依赖。
+
+```bash
+python tokenguard/tokenguard.py meter  AGENTS.md 日志.md     # 读前先量
+python tokenguard/tokenguard.py brief  AGENTS.md 计划.md     # 定长简报替代整读
+python tokenguard/tokenguard.py cache  --ttl 24h -- <命令>   # 结果缓存
+python tokenguard/tokenguard.py report                       # 看省了多少
+```
+
+实测：恢复上下文 31,325 → **192 token**；日志整读 63,228 → **23,782**；重复命令 100% 命中。
+
+> 大多数人不是不愿意省，**是看不见浪费在哪**。这个工具先让浪费可见。
+
